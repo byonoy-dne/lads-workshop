@@ -1,0 +1,36 @@
+---
+BasedOnStyle: Mozilla
+IndentWidth: '4'
+AccessModifierOffset: '-4'
+IncludeBlocks: Regroup
+Cpp11BracedListStyle: true
+AlwaysBreakAfterDefinitionReturnType: None
+AlwaysBreakAfterReturnType: None
+BraceWrapping:
+  AfterCaseLabel:        false
+  AfterClass:            true
+  AfterControlStatement: MultiLine
+  AfterEnum:             false
+  AfterFunction:         true
+  AfterNamespace:        false
+  AfterStruct:           true
+  AfterUnion:            false
+  AfterExternBlock:      false
+  BeforeCatch:           true
+  BeforeElse:            true
+  BeforeLambdaBody:      false
+  BeforeWhile:           true
+  IndentBraces:          false
+  SplitEmptyFunction:    false
+  SplitEmptyRecord:      false
+  SplitEmptyNamespace:   false
+BreakBeforeBraces: Custom
+ColumnLimit: '120'
+IncludeCategories:
+    - Regex:           '^".*'
+      Priority:        10
+    - Regex:           '^<.*/'
+      Priority:        40
+    - Regex:           '.*'
+      Priority:        50
+...
