@@ -109,6 +109,34 @@ int main(int argc, char* argv[])
     UA_BrowseResult_clear(&deviceBrowseResult);
 #endif
 
+    // stop here if we only want to show step 2
+#if workshopStep >= 3
+    //---------------------------------------------------------------
+    // Step 3: access the device as LuminescenseReader
+    //---------------------------------------------------------------
+    // The TS workshop project does some wonderful high-level language trickery to wrap the device representation and
+    // access. We can't really do that in C, so here we'll settle for defining all the node IDs we're going to use.
+
+    // We could browse the tree as demonstrated in step 2 to dynimcally find the nodes, but in a resource constrained
+    // environment it is probably best to just hard-code the node IDs. You could also use the CMake macro
+    // ua_generate_nodeid_header to generate named constants at compile time, but that requires an additional CSV file
+    // per nodeset. The official nodeset repo at https://github.com/OPCFoundation/UA-Nodeset contains these files for
+    // all namespaces, including LADS. But the workshop project does not provide a CSV file for the
+    // LuminescenceReader.xml, so we don't use that mechanism here.
+
+    size_t namespaceLumiIndex;
+    UA_CHECK(
+      UA_Server_getNamespaceByName(server, UA_STRING("http://spectaris.de/LuminescenceReader/"), &namespaceLumiIndex));
+    const UA_NodeId cover = UA_NODEID_NUMERIC(namespaceLumiIndex, 5049);
+    const UA_NodeId injector1 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5051);
+    const UA_NodeId injector2 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5052);
+    const UA_NodeId injector3 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5053);
+    const UA_NodeId luminescenceSensor = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
+    const UA_NodeId shakerController = UA_NODEID_NUMERIC(namespaceLumiIndex, 5055);
+    const UA_NodeId temperatureController = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
+    const UA_NodeId wastePump = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
+#endif
+
     UA_CHECK(runServer(server));
     UA_Server_delete(server);
 
