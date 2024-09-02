@@ -29,7 +29,6 @@ UA_StatusCode runServer(UA_Server* server)
     }
 
     UA_StatusCode result = UA_Server_run_shutdown(server);
-    UA_Server_delete(server);
 
     return result;
 }
@@ -49,9 +48,9 @@ int main(int argc, char* argv[])
     UA_ServerConfig_setMinimal(config, 26543, NULL);
 
     const char* uri = "LADS-SampleServer";
-    config->buildInfo.manufacturerName = UA_STRING("SPECTARIS");
+    config->buildInfo.manufacturerName = UA_STRING_ALLOC("SPECTARIS");
     config->buildInfo.productUri = UA_STRING_ALLOC(uri);
-    config->buildInfo.softwareVersion = UA_STRING("1.0.0");
+    config->buildInfo.softwareVersion = UA_STRING_ALLOC("1.0.0");
     config->applicationDescription.applicationName = UA_LOCALIZEDTEXT_ALLOC("en", "LADS LuminescenceReader");
     config->applicationDescription.applicationType = UA_APPLICATIONTYPE_SERVER;
     config->applicationDescription.productUri = UA_STRING_ALLOC(uri);
@@ -63,15 +62,55 @@ int main(int argc, char* argv[])
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "Step 1: server is ready");
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "CTRL+C to stop");
 
-#if workshopStep > 1
+    // stop here if we only want to show step 1
+#if workshopStep >= 2
     //---------------------------------------------------------------
     // Step 2: search for devices availabe in the server's DeviceSet
     // DeviceSet is defined by OPC UA Device Integration and represents the collection of devices in a server
     //---------------------------------------------------------------
 
+    // The deviceSet Node instance is created by the DI Nodeset and is stable. Thats why we can use this ID
+    // directly in its namespace to get directly to the node
+    const UA_UInt32 deviceSetIdentifier = 5001;
+
+    // To get the node instance we get a reference to the namespace it is located in and use the Node ID from above to
+    // find it
+    size_t namespaceDiIndex;
+    UA_CHECK(UA_Server_getNamespaceByName(server, UA_STRING("http://opcfoundation.org/UA/DI/"), &namespaceDiIndex));
+    const UA_NodeId deviceSetNodeID = UA_NODEID_NUMERIC(namespaceDiIndex, deviceSetIdentifier);
+    const UA_NodeId referenceTypeAggregates = UA_NODEID_NUMERIC(0, 44);
+
+    UA_BrowseDescription browseDescr;
+    UA_BrowseDescription_init(&browseDescr);
+    browseDescr.nodeId = deviceSetNodeID;
+    browseDescr.browseDirection = UA_BROWSEDIRECTION_FORWARD;
+    browseDescr.referenceTypeId = referenceTypeAggregates;
+    browseDescr.includeSubtypes = UA_TRUE;
+    browseDescr.resultMask = UA_BROWSERESULTMASK_BROWSENAME | UA_BROWSERESULTMASK_TYPEDEFINITION;
+
+    UA_BrowseResult deviceBrowseResult = UA_Server_browse(server, UA_UINT32_MAX, &browseDescr);
+    UA_ExpandedNodeId devices[deviceBrowseResult.referencesSize];
+    for (size_t i = 0; i < deviceBrowseResult.referencesSize; ++i) {
+        UA_ReferenceDescription* refDescr = deviceBrowseResult.references + i;
+        devices[i] = refDescr->nodeId;
+
+        UA_QualifiedName typeName;
+        UA_QualifiedName_init(&typeName);
+        UA_Server_readBrowseName(server, refDescr->typeDefinition.nodeId, &typeName);
+
+        UA_LOG_INFO(UA_Log_Stdout,
+                    UA_LOGCATEGORY_USERLAND,
+                    "Step 2: Found device %.*s of type %.*s",
+                    refDescr->browseName.name.length,
+                    refDescr->browseName.name.data,
+                    typeName.name.length,
+                    typeName.name.data);
+    }
+    UA_BrowseResult_clear(&deviceBrowseResult);
 #endif
 
-    runServer(server);
+    UA_CHECK(runServer(server));
+    UA_Server_delete(server);
 
     return EXIT_SUCCESS;
 }
