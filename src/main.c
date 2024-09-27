@@ -1,9 +1,14 @@
 #include "namespace_app_generated.h"
 #include "open62541.h"
 
+#include <pthread.h>
 #include <signal.h>
 
-#define workshopStep 13
+#define WORKSHOP_STEP 13
+
+#define WORKER_UPDATE_RATE_US 500000
+#define DAMPING 0.8
+#define WELLS 96
 
 #define UA_CHECK(status)                                                                                               \
     do {                                                                                                               \
@@ -15,6 +20,34 @@
     while (0)
 
 static volatile UA_Boolean running = true;
+pthread_t sensorThread = 0;
+
+typedef struct
+{
+    UA_NodeId id;
+    UA_NodeId currentValue;
+    UA_NodeId targetValue;
+    UA_NodeId isEnabled;
+} analog_control_function_t;
+
+struct
+{
+    UA_NodeId cover;
+    UA_NodeId injector1;
+    UA_NodeId injector2;
+    UA_NodeId injector3;
+    UA_NodeId luminescenceSensor;
+    UA_NodeId shakerController;
+    analog_control_function_t temperatureController;
+    UA_NodeId wastePump;
+} functionSet;
+
+struct
+{
+    UA_Double targetTemperature;
+    UA_Double currentTemperature;
+    UA_Boolean temperatureControllerIsOn;
+} deviceState;
 
 static void stopHandler(int sig)
 {
@@ -22,10 +55,55 @@ static void stopHandler(int sig)
     running = false;
 }
 
+UA_Double randomDouble()
+{
+    return ((UA_Double)rand()) / RAND_MAX;
+}
+
+// Step 4
+void updateSensors(UA_Server* server)
+{
+    // temperature with 1st order low pass filter and noise
+    UA_Double temperature = deviceState.temperatureControllerIsOn ? deviceState.targetTemperature : 25;
+    deviceState.currentTemperature = DAMPING * deviceState.currentTemperature + (1 - DAMPING) * temperature;
+    UA_Double currentTemperatureWithNoise = deviceState.currentTemperature + 0.2 * (randomDouble() - 0.5);
+
+    // array of luminescence readings with some noise
+    UA_Double luminescenceWithNoise[WELLS];
+    for (int i = 0; i < WELLS; ++i) {
+        luminescenceWithNoise[i] = i * i + (randomDouble() - 0.5);
+    }
+
+    // use the setValueFromSource() function to update the variables in the OPC UA information model
+    UA_Variant temperatureVariant, luminescenceVariant;
+    UA_Variant_setScalar(&temperatureVariant, &currentTemperatureWithNoise, &UA_TYPES[UA_TYPES_DOUBLE]);
+    UA_Server_writeValue(server, functionSet.temperatureController.currentValue, temperatureVariant);
+
+    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "Temperature: %f", currentTemperatureWithNoise);
+}
+
+void* worker(void* server)
+{
+    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "Background worker started");
+
+    while (running) {
+        updateSensors(server);
+        usleep(WORKER_UPDATE_RATE_US);
+    }
+
+    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "Background worker shutting down");
+
+    return NULL;
+}
+
 UA_StatusCode runServer(UA_Server* server)
 {
     while (running) {
         UA_Server_run_iterate(server, true);
+    }
+
+    if (sensorThread) {
+        pthread_join(sensorThread, NULL);
     }
 
     UA_StatusCode result = UA_Server_run_shutdown(server);
@@ -37,6 +115,8 @@ int main(int argc, char* argv[])
 {
     signal(SIGINT, stopHandler);
     signal(SIGTERM, stopHandler);
+
+    srand(time(NULL));
 
     //---------------------------------------------------------------
     // Step 1: load the required OPC UA nodesets and start the server
@@ -63,7 +143,7 @@ int main(int argc, char* argv[])
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "CTRL+C to stop");
 
     // stop here if we only want to show step 1
-#if workshopStep >= 2
+#if WORKSHOP_STEP >= 2
     //---------------------------------------------------------------
     // Step 2: search for devices availabe in the server's DeviceSet
     // DeviceSet is defined by OPC UA Device Integration and represents the collection of devices in a server
@@ -110,14 +190,14 @@ int main(int argc, char* argv[])
 #endif
 
     // stop here if we only want to show step 2
-#if workshopStep >= 3
+#if WORKSHOP_STEP >= 3
     //---------------------------------------------------------------
     // Step 3: access the device as LuminescenseReader
     //---------------------------------------------------------------
     // The TS workshop project does some wonderful high-level language trickery to wrap the device representation and
     // access. We can't really do that in C, so here we'll settle for defining all the node IDs we're going to use.
 
-    // We could browse the tree as demonstrated in step 2 to dynimcally find the nodes, but in a resource constrained
+    // We could browse the tree as demonstrated in step 2 to dynamically find the nodes, but in a resource constrained
     // environment it is probably best to just hard-code the node IDs. You could also use the CMake macro
     // ua_generate_nodeid_header to generate named constants at compile time, but that requires an additional CSV file
     // per nodeset. The official nodeset repo at https://github.com/OPCFoundation/UA-Nodeset contains these files for
@@ -127,14 +207,32 @@ int main(int argc, char* argv[])
     size_t namespaceLumiIndex;
     UA_CHECK(
       UA_Server_getNamespaceByName(server, UA_STRING("http://spectaris.de/LuminescenceReader/"), &namespaceLumiIndex));
-    const UA_NodeId cover = UA_NODEID_NUMERIC(namespaceLumiIndex, 5049);
-    const UA_NodeId injector1 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5051);
-    const UA_NodeId injector2 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5052);
-    const UA_NodeId injector3 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5053);
-    const UA_NodeId luminescenceSensor = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
-    const UA_NodeId shakerController = UA_NODEID_NUMERIC(namespaceLumiIndex, 5055);
-    const UA_NodeId temperatureController = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
-    const UA_NodeId wastePump = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
+    functionSet.cover = UA_NODEID_NUMERIC(namespaceLumiIndex, 5049);
+    functionSet.injector1 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5051);
+    functionSet.injector2 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5052);
+    functionSet.injector3 = UA_NODEID_NUMERIC(namespaceLumiIndex, 5053);
+    functionSet.luminescenceSensor = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
+    functionSet.shakerController = UA_NODEID_NUMERIC(namespaceLumiIndex, 5055);
+    functionSet.temperatureController.id = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
+    functionSet.temperatureController.currentValue = UA_NODEID_NUMERIC(namespaceLumiIndex, 6177);
+    functionSet.temperatureController.targetValue = UA_NODEID_NUMERIC(namespaceLumiIndex, 6178);
+    functionSet.temperatureController.isEnabled = UA_NODEID_NUMERIC(namespaceLumiIndex, 6179);
+    functionSet.wastePump = UA_NODEID_NUMERIC(namespaceLumiIndex, 5054);
+#endif
+
+    // stop here if we only want to show step 3
+#if WORKSHOP_STEP >= 4
+    //---------------------------------------------------------------
+    // Step 4: set OPC UA variable values from internal variables (use case: read values from the device)
+    //---------------------------------------------------------------
+
+    deviceState.targetTemperature = 37.0;
+    deviceState.currentTemperature = 25.0;
+    deviceState.temperatureControllerIsOn = UA_TRUE;
+
+    // The TS workshop project put the logic into a lambda. We don't have that luxury so all of this step's logic is in
+    // the updateSensors funtion.
+    pthread_create(&sensorThread, NULL, worker, server);
 #endif
 
     UA_CHECK(runServer(server));
